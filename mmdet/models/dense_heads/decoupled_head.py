@@ -15,6 +15,10 @@ class DecoupledHead(ATSSHead):
     def __init__(self,
                  num_classes,
                  in_channels,
+                 bbox_coder=dict(
+                     type='YOLOBBoxCoder'
+                 ),
+                 reg_decoded_bbox=True,
                  init_cfg=dict(
                      type='Normal',
                      layer='Conv2d',
@@ -29,9 +33,10 @@ class DecoupledHead(ATSSHead):
             num_classes,
             in_channels,
             init_cfg=init_cfg,
+            bbox_coder=bbox_coder,
+            reg_decoded_bbox=reg_decoded_bbox,
             **kwargs
         )
-        self.sub_decode_bbox = YOLOBBoxCoder()
 
     def _init_layers(self):
         """Initialize layers of the head."""
@@ -118,13 +123,6 @@ class DecoupledHead(ATSSHead):
 
         return cls_score, bbox_pred, centerness
 
-    def _bbox_decode(self, priors, bbox_pred, stride):
-        decoded_bbox = self.sub_bbox_decode.decode(priors, bbox_pred, stride) #
-        decoded_bbox = self.bbox_coder.decode(priors, decoded_bbox)
-
-        return decoded_bbox
-
-
     def loss_single(self, anchors, cls_score, bbox_pred, centerness, stride, labels,
                     label_weights, bbox_targets, num_total_samples):
         """Compute loss of a single scale level.
@@ -177,7 +175,7 @@ class DecoupledHead(ATSSHead):
 
             centerness_targets = self.centerness_target(
                 pos_anchors, pos_bbox_targets)
-            pos_decode_bbox_pred = self.sub_decode_bbox.decode(
+            pos_decode_bbox_pred = self.bbox_coder.decode(
                 pos_anchors, pos_bbox_pred, stride)
 
             # regression loss
