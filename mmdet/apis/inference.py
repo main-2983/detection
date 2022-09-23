@@ -156,6 +156,59 @@ def inference_detector(model, imgs):
         return results
 
 
+def custom_inference(model, imgs, with_nms=True):
+    if isinstance(imgs, (list, tuple)):
+        is_batch = True
+    else:
+        imgs = [imgs]
+        is_batch = False
+
+    cfg = model.cfg
+    device = next(model.parameters()).device  # model device
+
+    if isinstance(imgs[0], np.ndarray):
+        cfg = cfg.copy()
+        # set loading pipeline type
+        cfg.data.test.pipeline[0].type = 'LoadImageFromWebcam'
+
+    cfg.data.test.pipeline = replace_ImageToTensor(cfg.data.test.pipeline)
+    test_pipeline = Compose(cfg.data.test.pipeline)
+
+    datas = []
+    for img in imgs:
+        # prepare data
+        if isinstance(img, np.ndarray):
+            # directly add img
+            data = dict(img=img)
+        else:
+            # add information into dict
+            data = dict(img_info=dict(filename=img), img_prefix=None)
+        # build the data pipeline
+        data = test_pipeline(data)
+        datas.append(data)
+
+    data = collate(datas, samples_per_gpu=len(imgs))
+    # just get the actual data from DataContainer
+    data['img_metas'] = [img_metas.data[0] for img_metas in data['img_metas']]
+    data['img'] = [img.data[0] for img in data['img']]
+    if next(model.parameters()).is_cuda:
+        # scatter to specified GPU
+        data = scatter(data, [device])[0]
+    else:
+        for m in model.modules():
+            assert not isinstance(
+                m, RoIPool
+            ), 'CPU inference with RoIPool is not supported currently.'
+
+    bbox_head = model.bbox_head
+    with torch.no_grad():
+        backbone_feats = model.extract_feat(data['img'][0])
+        outs = bbox_head(backbone_feats)
+        result_list = bbox_head.get_bboxes(*outs, img_metas=data['img_metas'][0], with_nms=with_nms, rescale=True)
+    return result_list[0]
+
+
+
 async def async_inference_detector(model, imgs):
     """Async inference image(s) with the detector.
 
