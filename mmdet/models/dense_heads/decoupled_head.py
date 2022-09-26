@@ -1068,9 +1068,9 @@ class DecoupledHead_v9(ATSSHead):
         cls_score = self.atss_cls(cls_feat)
         # we just follow atss, not apply exp in bbox_pred
 
-        center_pred = self.center_reg(reg_feat).float()
-        wh_pred = self.wh_reg(reg_feat).float()
-        bbox_pred = scale(torch.cat([center_pred, wh_pred], dim=1))
+        center_pred = scale[0](self.center_reg(reg_feat)).float()
+        wh_pred = scale[0](self.wh_reg(reg_feat)).float()
+        bbox_pred = torch.cat([center_pred, wh_pred], dim=1)
 
         centerness = self.atss_centerness(reg_feat)
         return cls_score, bbox_pred, centerness
