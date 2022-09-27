@@ -71,11 +71,12 @@ def vis_featmap(config_file,
         backbone_feats = model.extract_feat(data['img'][0])
         mlvl_featmap = bbox_head(backbone_feats)
         mlvl_cls_pred, mlvl_bbox_pred, mlvl_centerness = mlvl_featmap
+        # mlvl_cls_pred, mlvl_bbox_pred = mlvl_featmap
 
     debug_featmap = []
     for idx in range(len(mlvl_bbox_pred)):
-        featmap = mlvl_bbox_pred[idx][:, 2:, :, :]
-        featmap = torch.mean(featmap, dim=0, keepdim=True)
+        featmap = mlvl_bbox_pred[idx][:, :, :, :]
+        featmap = torch.mean(featmap, dim=1, keepdim=True)
         featmap = F.upsample(
             input=featmap,
             size=data['img_metas'][0][0]['img_shape'][:2],
@@ -84,7 +85,7 @@ def vis_featmap(config_file,
         featmap = featmap.cpu().numpy()
         debug_featmap.append(featmap)
 
-    fig = plt.figure(figsize=(10, 10))
+    fig = plt.figure(figsize=(10, 5))
     for scale, featmap in enumerate(debug_featmap):
         ax = fig.add_subplot(1, len(debug_featmap), scale + 1)
         _, c, _, _ = featmap.shape
@@ -95,6 +96,6 @@ def vis_featmap(config_file,
 
 
 if __name__ == '__main__':
-    vis_featmap("../../local_cfg/atss_test.py",
-                "../../work_dirs/atss_test/epoch_12.pth",
+    vis_featmap("../../local_cfg/fcos_test.py",
+                "../../work_dirs/fcos_test/fcos_center-normbbox-centeronreg-giou_r50_caffe_fpn_gn-head_1x_coco-0a0d75a8.pth",
                 "../../../Dataset/image (201).jpg")
