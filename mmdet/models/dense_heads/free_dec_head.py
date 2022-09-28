@@ -8,18 +8,12 @@ from .fcos_head import FCOSHead
 @HEADS.register_module()
 class AFDecoupled_Head(FCOSHead):
     def __init__(self,
-                 in_channels,
                  num_classes,
+                 in_channels,
                  **kwargs):
         super(AFDecoupled_Head, self).__init__(
-            in_channels,
             num_classes,
-            norm_on_bbox=True,
-            centerness_on_reg=True,
-            dcn_on_last_conv=False,
-            center_sampling=True,
-            conv_bias=True,
-            loss_bbox=dict(type='GIoULoss', loss_weight=1.0),
+            in_channels,
             **kwargs
         )
 
