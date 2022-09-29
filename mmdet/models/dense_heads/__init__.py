@@ -44,7 +44,7 @@ from .yolox_head import YOLOXHead
 from .decoupled_head import DecoupledHead, DecoupledHead_v2, DecoupledHead_v3, \
     DecoupledHead_v4, DecoupledHead_v5, DecoupledHead_v6, DecoupledHead_v7, \
     DecoupledHead_v8, DecoupledHead_v9, DecoupledHead_v10
-from .free_dec_head import AFDecoupled_Head
+from .free_dec_head import AFDecoupled_Head, AFDecoupled_Head_v2
 
 __all__ = [
     'AnchorFreeHead', 'AnchorHead', 'GuidedAnchorHead', 'FeatureAdaption',
