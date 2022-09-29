@@ -8,9 +8,11 @@ from .pseudo_bbox_coder import PseudoBBoxCoder
 from .tblr_bbox_coder import TBLRBBoxCoder
 from .yolo_bbox_coder import YOLOBBoxCoder
 from .point_deltaxy_wh_coder import PointDeltaXY_WHCoder
+from .rev_distance_point_bbox_coder import RevDistancePointBBoxCoder
 
 __all__ = [
     'BaseBBoxCoder', 'PseudoBBoxCoder', 'DeltaXYWHBBoxCoder',
     'LegacyDeltaXYWHBBoxCoder', 'TBLRBBoxCoder', 'YOLOBBoxCoder',
-    'BucketingBBoxCoder', 'DistancePointBBoxCoder', 'PointDeltaXY_WHCoder'
+    'BucketingBBoxCoder', 'DistancePointBBoxCoder', 'PointDeltaXY_WHCoder',
+    'RevDistancePointBBoxCoder'
 ]
