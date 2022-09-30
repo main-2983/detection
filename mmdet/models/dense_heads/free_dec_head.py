@@ -92,7 +92,7 @@ class AFDecoupled_Head_v2(FCOSHead):
         self.conv_cls = nn.Conv2d(
             self.feat_channels, self.cls_out_channels, 3, padding=1)
         self.conv_reg = nn.ModuleList([
-            nn.Conv2d(self.feat_channels, 1, 3, padding=1)
+            nn.Conv2d(self.feat_channels, 2, 3, padding=1)
         ] * 2)
 
     def forward_single(self, x, scale, stride):
