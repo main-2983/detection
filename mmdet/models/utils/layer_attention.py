@@ -69,7 +69,7 @@ class LayerAttnS(nn.Module):
         avg_feat = nn.AdaptiveAvgPool2d(1)(x)
         weight = self.layer_attn(avg_feat)
 
-        x = x.view(b, self.groups, c // self.groups, 1, 1)
+        x = x.view(b, self.groups, c // self.groups, h, w)
         weight = weight.view(b, self.groups, 1, 1, 1)
         _x = x.clone()
 
