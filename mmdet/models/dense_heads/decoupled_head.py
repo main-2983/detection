@@ -5,7 +5,7 @@ from mmcv.cnn import ConvModule, Scale
 from ..builder import HEADS
 from .atss_head import ATSSHead
 from mmdet.models.utils import SELayer
-from mmdet.models.utils.layer_attention import LayerAttn
+from mmdet.models.utils.layer_attention import LayerAttnS
 
 
 @HEADS.register_module()
@@ -1284,8 +1284,8 @@ class DecoupledHead_v11(ATSSHead):
             self.pred_kernel_size,
             padding=pred_pad_size)
 
-        self.layer_attn = LayerAttn(
-            self.feat_channels,
+        self.layer_attn = LayerAttnS(
+            4,
             2
         )
 
