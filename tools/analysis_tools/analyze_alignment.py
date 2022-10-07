@@ -1,12 +1,16 @@
 import copy
 import matplotlib.pyplot as plt
+import numpy as np
 
 import torch
 from mmcv import Config
+from mmcv.parallel import collate, scatter
+from mmcv.ops import RoIPool
 
 from mmdet.utils import get_device
-from mmdet.datasets import build_dataset
-from mmdet.core import BboxOverlaps2D
+from mmdet.datasets import build_dataset, replace_ImageToTensor
+from mmdet.datasets.pipelines import Compose
+from mmdet.core import BboxOverlaps2D, filter_scores_and_topk
 from mmdet.apis.inference import init_detector
 
 
@@ -93,3 +97,108 @@ def analyze_aligment(config_file,
             cb.ax.tick_params(labelsize=5)
 
         plt.show()
+
+
+def analyze_duplicate(config_file,
+                      checkpoint_file,
+                      imgs):
+    cfg = Config.fromfile(config_file)
+    device = get_device()
+
+    model = init_detector(config_file, checkpoint_file, device=device)
+    model.eval()
+    model_head = model.bbox_head
+
+    if isinstance(imgs, (list, tuple)):
+        is_batch = True
+    else:
+        imgs = [imgs]
+        is_batch = False
+
+    cfg = model.cfg
+    device = next(model.parameters()).device  # model device
+
+    if isinstance(imgs[0], np.ndarray):
+        cfg = cfg.copy()
+        # set loading pipeline type
+        cfg.data.test.pipeline[0].type = 'LoadImageFromWebcam'
+
+    cfg.data.test.pipeline = replace_ImageToTensor(cfg.data.test.pipeline)
+    test_pipeline = Compose(cfg.data.test.pipeline)
+
+    datas = []
+    for img in imgs:
+        # prepare data
+        if isinstance(img, np.ndarray):
+            # directly add img
+            data = dict(img=img)
+        else:
+            # add information into dict
+            data = dict(img_info=dict(filename=img), img_prefix=None)
+        # build the data pipeline
+        data = test_pipeline(data)
+        datas.append(data)
+
+    data = collate(datas, samples_per_gpu=len(imgs))
+    # just get the actual data from DataContainer
+    data['img_metas'] = [img_metas.data[0] for img_metas in data['img_metas']]
+    data['img'] = [img.data[0] for img in data['img']]
+    if next(model.parameters()).is_cuda:
+        # scatter to specified GPU
+        data = scatter(data, [device])[0]
+    else:
+        for m in model.modules():
+            assert not isinstance(
+                m, RoIPool
+            ), 'CPU inference with RoIPool is not supported currently.'
+
+    with torch.no_grad():
+        backbone_feat = model.extract_feat(data['img'][0]) # tuple, len = num_level
+        mlvl_predictions = model_head(backbone_feat)
+
+        if len(mlvl_predictions) == 3:
+            mlvl_cls_pred, mlvl_bbox_pred, mlvl_centerness_pred = mlvl_predictions
+        elif len(mlvl_predictions) == 2:
+            mlvl_cls_pred, mlvl_bbox_pred = mlvl_predictions
+            mlvl_centerness_pred = [None] * len(mlvl_cls_pred)
+        else:
+            raise NotImplementedError
+
+    filtered_mlvl_conf = []
+    # cls_pred: (batch, num_priors * num_classes, H, W)
+    for scale, (cls_pred, bbox_pred, centerness_pred) in enumerate(zip(mlvl_cls_pred,
+                                                                   mlvl_bbox_pred,
+                                                                   mlvl_centerness_pred)):
+        cls_pred, bbox_pred, centerness_pred = cls_pred[0], bbox_pred[0], centerness_pred[0]
+        _, h, w = cls_pred.shape
+
+        cls_pred = cls_pred.permute(1, 2, 0)
+        cls_pred = cls_pred.reshape(-1, cls_pred.shape[-1])
+        cls_pred = cls_pred.sigmoid()
+
+        centerness_pred = centerness_pred.permute(1, 2, 0)
+        centerness_pred = centerness_pred.reshape(-1,)
+        centerness_pred = centerness_pred.sigmoid()
+
+        filtered_scores, labels, keep_idxs, filtered_results = filter_scores_and_topk(
+            cls_pred, 0.05, 100, None
+        )
+        filtered_centerness = centerness_pred[keep_idxs]
+
+        filtered_conf = torch.zeros((h * w,))
+        filtered_conf[keep_idxs] = filtered_scores * filtered_centerness
+        filtered_conf = filtered_conf.reshape(h, w)
+        filtered_mlvl_conf.append(filtered_conf)
+
+    fig = plt.figure(figsize=(10, 5))
+    fig.suptitle(f"Confidence score")
+    for scale, conf in enumerate(filtered_mlvl_conf):
+        conf = conf.cpu().numpy()
+
+        ax = fig.add_subplot(1, len(filtered_mlvl_conf), scale + 1)
+        ax.set_title(f"{scale + 1}")
+        im = ax.imshow(conf)
+        cb = plt.colorbar(im, fraction=0.04, ax=ax)
+        cb.ax.tick_params(labelsize=5)
+
+    plt.show()
