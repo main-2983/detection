@@ -165,28 +165,33 @@ def analyze_duplicate(config_file,
             raise NotImplementedError
 
     filtered_mlvl_conf = []
+    mlvl_centerness_pred = [None] * len(mlvl_cls_pred)
     # cls_pred: (batch, num_priors * num_classes, H, W)
     for scale, (cls_pred, bbox_pred, centerness_pred) in enumerate(zip(mlvl_cls_pred,
                                                                    mlvl_bbox_pred,
                                                                    mlvl_centerness_pred)):
-        cls_pred, bbox_pred, centerness_pred = cls_pred[0], bbox_pred[0], centerness_pred[0]
+        cls_pred, bbox_pred = cls_pred[0], bbox_pred[0]
+        if centerness_pred is not None:
+            centerness_pred = centerness_pred[0]
         _, h, w = cls_pred.shape
 
         cls_pred = cls_pred.permute(1, 2, 0)
         cls_pred = cls_pred.reshape(-1, cls_pred.shape[-1])
         cls_pred = cls_pred.sigmoid()
 
-        centerness_pred = centerness_pred.permute(1, 2, 0)
-        centerness_pred = centerness_pred.reshape(-1,)
-        centerness_pred = centerness_pred.sigmoid()
+        if centerness_pred is not None:
+            centerness_pred = centerness_pred.permute(1, 2, 0)
+            centerness_pred = centerness_pred.reshape(-1,)
+            centerness_pred = centerness_pred.sigmoid()
 
         filtered_scores, labels, keep_idxs, filtered_results = filter_scores_and_topk(
             cls_pred, 0.05, 100, None
         )
-        filtered_centerness = centerness_pred[keep_idxs]
+        if centerness_pred is not None:
+            filtered_centerness = centerness_pred[keep_idxs]
 
         filtered_conf = torch.zeros((h * w,))
-        filtered_conf[keep_idxs] = filtered_scores * filtered_centerness
+        filtered_conf[keep_idxs] = filtered_scores * filtered_centerness if centerness_pred is not None else filtered_scores
         filtered_conf = filtered_conf.reshape(h, w)
         filtered_mlvl_conf.append(filtered_conf)
 
