@@ -14,10 +14,10 @@ from mmdet.core import BboxOverlaps2D, filter_scores_and_topk
 from mmdet.apis.inference import init_detector
 
 
-def analyze_aligment(config_file,
-                     checkpoint_file,
-                     category: int=0,
-                     img_id: int=0):
+def analyze_cls_and_iou_alignment(config_file,
+                                 checkpoint_file,
+                                 category: int=0,
+                                 img_id: int=0):
     """ Script to visualize alignment for classification and regression
     Args:
         config_file: model config file
@@ -99,6 +99,98 @@ def analyze_aligment(config_file,
         plt.show()
 
 
+def analyze_cls_and_lqe_alignment(config_file,
+                                  checkpoint_file,
+                                  imgs,
+                                  category: int=0):
+    cfg = Config.fromfile(config_file)
+    device = get_device()
+
+    model = init_detector(config_file, checkpoint_file, device=device)
+    model.eval()
+    model_head = model.bbox_head
+
+    if isinstance(imgs, (list, tuple)):
+        is_batch = True
+    else:
+        imgs = [imgs]
+        is_batch = False
+
+    cfg = model.cfg
+    device = next(model.parameters()).device  # model device
+
+    if isinstance(imgs[0], np.ndarray):
+        cfg = cfg.copy()
+        # set loading pipeline type
+        cfg.data.test.pipeline[0].type = 'LoadImageFromWebcam'
+
+    cfg.data.test.pipeline = replace_ImageToTensor(cfg.data.test.pipeline)
+    test_pipeline = Compose(cfg.data.test.pipeline)
+
+    datas = []
+    for img in imgs:
+        # prepare data
+        if isinstance(img, np.ndarray):
+            # directly add img
+            data = dict(img=img)
+        else:
+            # add information into dict
+            data = dict(img_info=dict(filename=img), img_prefix=None)
+        # build the data pipeline
+        data = test_pipeline(data)
+        datas.append(data)
+
+    data = collate(datas, samples_per_gpu=len(imgs))
+    # just get the actual data from DataContainer
+    data['img_metas'] = [img_metas.data[0] for img_metas in data['img_metas']]
+    data['img'] = [img.data[0] for img in data['img']]
+    if next(model.parameters()).is_cuda:
+        # scatter to specified GPU
+        data = scatter(data, [device])[0]
+    else:
+        for m in model.modules():
+            assert not isinstance(
+                m, RoIPool
+            ), 'CPU inference with RoIPool is not supported currently.'
+
+    with torch.no_grad():
+        backbone_feat = model.extract_feat(data['img'][0]) # tuple, len = num_level
+        mlvl_predictions = model_head(backbone_feat)
+    assert len(mlvl_predictions) == 3, "This function is only for Decode Head with 3 outputs:" \
+                                       "'Classification', 'LQE' and 'Bounding Box'"
+    mlvl_cls_pred, mlvl_bbox_pred, mlvl_lqe_pred = mlvl_predictions
+
+    for scale, (cls_pred, lqe_pred) in enumerate(zip(mlvl_cls_pred,
+                                                            mlvl_lqe_pred)):
+        cls_pred, lqe_pred = cls_pred[0], lqe_pred[0]
+        cls_pred = cls_pred.permute(1, 2, 0)
+        lqe_pred = lqe_pred.permute(1, 2, 0)
+        cls_pred = cls_pred.sigmoid()
+        lqe_pred = lqe_pred.sigmoid()
+        mlvl_cls_pred[scale] = cls_pred
+        mlvl_lqe_pred[scale] = lqe_pred
+
+    fig = plt.figure(figsize=(10, 10))
+    fig.suptitle(f"Cls and LQE Alignment")
+    for scale, (cls_score, lqe_score) in enumerate(zip(mlvl_cls_pred, mlvl_lqe_pred)):
+        cls_score = cls_score[:, :, category] # (H, W, 1)
+
+        cls_score = cls_score.cpu().numpy()
+        lqe_score = lqe_score.cpu().numpy()
+
+        ax1 = fig.add_subplot(1, len(mlvl_cls_pred), scale + 1)
+        ax2 = fig.add_subplot(2, len(mlvl_cls_pred), scale + 1)
+        ax1.set_title("Cls Score")
+        ax2.set_title("LQE Score")
+        im1 = ax1.imshow(cls_score)
+        im2 = ax2.imshow(lqe_score)
+        cb1 = plt.colorbar(im1, fraction=0.04, ax=ax1)
+        cb2 = plt.colorbar(im2, fraction=0.04, ax=ax2)
+        cb1.ax.tick_params(labelsize=5)
+        cb2.ax.tick_params(labelsize=5)
+
+    plt.show()
+
 def analyze_duplicate(config_file,
                       checkpoint_file,
                       imgs):
@@ -165,7 +257,6 @@ def analyze_duplicate(config_file,
             raise NotImplementedError
 
     filtered_mlvl_conf = []
-    mlvl_centerness_pred = [None] * len(mlvl_cls_pred)
     # cls_pred: (batch, num_priors * num_classes, H, W)
     for scale, (cls_pred, bbox_pred, centerness_pred) in enumerate(zip(mlvl_cls_pred,
                                                                    mlvl_bbox_pred,
@@ -177,7 +268,10 @@ def analyze_duplicate(config_file,
 
         cls_pred = cls_pred.permute(1, 2, 0)
         cls_pred = cls_pred.reshape(-1, cls_pred.shape[-1])
-        cls_pred = cls_pred.sigmoid()
+        if model_head.loss_cls.activated is not True:
+            cls_pred = cls_pred.sigmoid()
+        else:
+            cls_pred = cls_pred
 
         if centerness_pred is not None:
             centerness_pred = centerness_pred.permute(1, 2, 0)
@@ -190,7 +284,7 @@ def analyze_duplicate(config_file,
         if centerness_pred is not None:
             filtered_centerness = centerness_pred[keep_idxs]
 
-        filtered_conf = torch.zeros((h * w,))
+        filtered_conf = torch.zeros((h * w,), device=device)
         filtered_conf[keep_idxs] = filtered_scores * filtered_centerness if centerness_pred is not None else filtered_scores
         filtered_conf = filtered_conf.reshape(h, w)
         filtered_mlvl_conf.append(filtered_conf)
