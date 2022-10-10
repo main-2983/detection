@@ -41,12 +41,6 @@ from .yolact_head import YOLACTHead, YOLACTProtonet, YOLACTSegmHead
 from .yolo_head import YOLOV3Head
 from .yolof_head import YOLOFHead
 from .yolox_head import YOLOXHead
-from .decoupled_head import DecoupledHead, DecoupledHead_v2, DecoupledHead_v3, \
-    DecoupledHead_v4, DecoupledHead_v5, DecoupledHead_v6, DecoupledHead_v7, \
-    DecoupledHead_v8, DecoupledHead_v9, DecoupledHead_v10, DecoupledHead_v11, \
-    DecoupledHead_v12
-from .free_dec_head import AFDecoupled_Head, AFDecoupled_Head_v2
-from .fcos_rev_head import RevFCOSHead, DecoupledRevFCOSHead
 
 __all__ = [
     'AnchorFreeHead', 'AnchorHead', 'GuidedAnchorHead', 'FeatureAdaption',
@@ -60,10 +54,5 @@ __all__ = [
     'AutoAssignHead', 'DETRHead', 'YOLOFHead', 'DeformableDETRHead',
     'SOLOHead', 'DecoupledSOLOHead', 'CenterNetHead', 'YOLOXHead',
     'DecoupledSOLOLightHead', 'LADHead', 'TOODHead', 'MaskFormerHead',
-    'Mask2FormerHead', 'SOLOV2Head', 'DDODHead', 'DecoupledHead',
-    'DecoupledHead_v2', 'DecoupledHead_v3', 'DecoupledHead_v4',
-    'DecoupledHead_v5', 'DecoupledHead_v6', 'DecoupledHead_v7',
-    'DecoupledHead_v8', 'DecoupledHead_v9', 'DecoupledHead_v10',
-    'AFDecoupled_Head', 'AFDecoupled_Head_v2', 'RevFCOSHead',
-    'DecoupledRevFCOSHead', 'DecoupledHead_v11', 'DecoupledHead_v12'
+    'Mask2FormerHead', 'SOLOV2Head', 'DDODHead'
 ]
