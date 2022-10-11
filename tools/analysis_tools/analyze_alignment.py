@@ -268,10 +268,13 @@ def analyze_duplicate(config_file,
 
         cls_pred = cls_pred.permute(1, 2, 0)
         cls_pred = cls_pred.reshape(-1, cls_pred.shape[-1])
-        if model_head.loss_cls.activated is not True:
+        try:
+            if model_head.loss_cls.activated is not True:
+                cls_pred = cls_pred.sigmoid()
+            else:
+                cls_pred = cls_pred
+        except AttributeError:
             cls_pred = cls_pred.sigmoid()
-        else:
-            cls_pred = cls_pred
 
         if centerness_pred is not None:
             centerness_pred = centerness_pred.permute(1, 2, 0)
