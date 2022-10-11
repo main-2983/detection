@@ -1,12 +1,10 @@
 from typing import Optional
 
-import torch
 from mmcv.runner.hooks import HOOKS, Hook
 import warnings
-from mmcv.runner import EpochBasedRunner
 
 @HOOKS.register_module()
-class LabelAssignmentVisHook(Hook):
+class BaseLabelAssignmentVisHook(Hook):
     def __init__(self,
                  sample_idxs: Optional[int, list]=0,
                  num_images=None):
@@ -42,20 +40,10 @@ class LabelAssignmentVisHook(Hook):
             self.sampled = True
 
     def after_train_epoch(self, runner):
-        # this will execute label assignment from the start for only the images
-        # in self.image_list
-        model = runner.model
-        # do this to stop model from updating gradient
-        model.eval()
-        with torch.no_grad():
-            for (image, gt_bboxes, gt_labels, img_metas) in zip(
-                    self.image_list,
-                    self.gt_bboxes_list,
-                    self.gt_label_list,
-                    self.img_metas_list):
-                outs = model(image)
-                loss_inputs = outs + (gt_bboxes, gt_labels, img_metas)
-                # this will calculate loss for one image and also
-                # perform label assignment during the process
-                losses = model.loss(*loss_inputs, gt_bboxes_ignore=None)
+        """ This will execute label assignment from the start for only the images
+        in self.image_list. Since every model has its own implementation of label assignment,
+        every specific label assignment strat will inherit from this Base and execute its own
+        label assignment """
+        pass
+
 
