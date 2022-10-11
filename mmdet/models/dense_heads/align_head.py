@@ -9,128 +9,144 @@ from mmdet.core import (anchor_inside_flags, bbox_overlaps, build_assigner,
                         reduce_mean, unmap, distance2bbox)
 from mmdet.core.utils import filter_scores_and_topk
 from ..builder import HEADS, build_loss
-from .atss_head import ATSSHead
+from .fcos_head import FCOSHead
 
 
 @HEADS.register_module()
-class AlignHead_v1(ATSSHead):
-    """ This is a FCOS Head with simOTA Label Assignment """
+class AlignHead_v1(FCOSHead):
+    """ FCOS Head with simOTA Assigner """
     def __init__(self,
                  num_classes,
                  in_channels,
-                 anchor_type='anchor_based',
                  **kwargs):
         super(AlignHead_v1, self).__init__(
             num_classes,
             in_channels,
             **kwargs
         )
-        assert anchor_type in ['anchor_based', 'anchor_free']
-        self.anchor_type = anchor_type
-        self.assigner = build_assigner(self.train_cfg.assigner)
 
-    def anchor_center(self, anchors, with_stride=None):
-        """Get anchor centers from anchors.
-
+    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'objectnesses'))
+    def loss(self,
+             cls_scores,
+             bbox_preds,
+             centernesses,
+             gt_bboxes,
+             gt_labels,
+             img_metas,
+             gt_bboxes_ignore=None):
+        """Compute loss of the head.
         Args:
-            anchors (Tensor): Anchor list with shape (N, 4), "xyxy" format.
-
-        Returns:
-            Tensor: Anchor centers with shape (N, 2), "xy" format.
+            cls_scores (list[Tensor]): Box scores for each scale level,
+                each is a 4D-tensor, the channel number is
+                num_priors * num_classes.
+            bbox_preds (list[Tensor]): Box energies / deltas for each scale
+                level, each is a 4D-tensor, the channel number is
+                num_priors * 4.
+            objectnesses (list[Tensor], Optional): Score factor for
+                all scale level, each is a 4D-tensor, has shape
+                (batch_size, 1, H, W).
+            gt_bboxes (list[Tensor]): Ground truth bboxes for each image with
+                shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
+            gt_labels (list[Tensor]): class indices corresponding to each box
+            img_metas (list[dict]): Meta information of each image, e.g.,
+                image size, scaling factor, etc.
+            gt_bboxes_ignore (None | list[Tensor]): specify which bounding
+                boxes can be ignored when computing the loss.
         """
-        anchors_cx = (anchors[..., 2] + anchors[..., 0]) / 2
-        anchors_cy = (anchors[..., 3] + anchors[..., 1]) / 2
-        if with_stride is None:
-            return torch.stack([anchors_cx, anchors_cy], dim=-1)
-        else:
-            stride_w, stride_h = with_stride[0], with_stride[1]
-            stride_w = anchors_cx.new_full((anchors_cx.shape[0],),
-                                           stride_w)
-            stride_h = anchors_cy.new_full((anchors_cy.shape[0],),
-                                           stride_h)
-            priors = torch.stack([anchors_cx, anchors_cy, stride_w, stride_h],
-                                 dim=-1)
-            return priors
-
-
-    def forward(self, feats):
-        return multi_apply(self.forward_single(feats,
-                                               self.scales,
-                                               self.prior_generator.strides))
-
-    def forward_single(self, x, scale, stride):
-        b, c, h, w = x.shape
-
-        level_idx = self.prior_generator.strides.index(stride)
-        anchor = self.prior_generator.single_level_grid_priors(
-            (h, w), level_idx, device=x.device
-        )
-        anchor = torch.cat([anchor for _ in range(b)])
-
-        cls_feat = x
-        reg_feat = x
-        for cls_conv in self.cls_convs:
-            cls_feat = cls_conv(cls_feat)
-        for reg_conv in self.reg_convs:
-            reg_feat = reg_conv(reg_feat)
-
-        cls_score = self.atss_cls(cls_feat)
-
-        bbox_pred = scale(self.atss_reg(reg_feat)).float()
-        if self.anchor_type == 'anchor_free':
-            bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 4)
-            bbox_pred = distance2bbox(
-                self.anchor_center(anchor) / stride[0], bbox_pred
-            ).reshape(b, h, w, 4).permute(0, 3, 1, 2)
-        elif self.anchor_type == 'anchor_based':
-            bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 4)
-            bbox_pred = self.bbox_coder.decode(anchor, bbox_pred).reshape(
-                b, h, w, 4).permute(0, 3, 1, 2) / stride[0]
-        else:
-            raise NotImplementedError
-
-        centerness = self.atss_centerness(reg_feat)
-        return cls_score, bbox_pred, centerness
-
-
-    def get_targets(self,
-                    anchor_list,
-                    valid_flag_list,
-                    gt_bboxes_list,
-                    img_metas,
-                    gt_bboxes_ignore_list=None,
-                    gt_labels_list=None,
-                    label_channels=1,
-                    unmap_outputs=True):
         num_imgs = len(img_metas)
-        assert len(anchor_list) == len(valid_flag_list) == num_imgs
+        featmap_sizes = [cls_score.shape[2:] for cls_score in cls_scores]
+        mlvl_priors = self.prior_generator.grid_priors(
+            featmap_sizes,
+            dtype=cls_scores[0].dtype,
+            device=cls_scores[0].device,
+            with_stride=True)
 
-        # concat all level anchors and flags to a single tensor
-        for i in range(num_imgs):
-            assert len(anchor_list[i]) == len(valid_flag_list[i])
-            anchor_list[i] = torch.cat(anchor_list[i])
+        flatten_cls_preds = [
+            cls_pred.permute(0, 2, 3, 1).reshape(num_imgs, -1,
+                                                 self.cls_out_channels)
+            for cls_pred in cls_scores
+        ]
+        flatten_bbox_preds = [
+            bbox_pred.permute(0, 2, 3, 1).reshape(num_imgs, -1, 4)
+            for bbox_pred in bbox_preds
+        ]
+        flatten_centerness = [
+            centerness.permute(0, 2, 3, 1).reshape(-1)
+            for centerness in centernesses
+        ]
 
-        # convert anchor to point with stride
-        for scale, (single_level_anchor, stride) in enumerate(
-            anchor_list, self.prior_generator.strides
-        ):
-            single_level_prior = self.anchor_center(single_level_anchor,
-                                                    stride)
-            anchor_list[scale] = single_level_prior
+        flatten_cls_preds = torch.cat(flatten_cls_preds, dim=1)
+        flatten_bbox_preds = torch.cat(flatten_bbox_preds, dim=1)
+        flatten_centerness = torch.cat(flatten_centerness)
+        flatten_priors = torch.cat(mlvl_priors)
+        flatten_bboxes = self.bbox_coder.decode(flatten_priors, flatten_bbox_preds)
 
+        (pos_masks, cls_targets, centerness_targets, bbox_targets, l1_targets,
+         num_fg_imgs) = multi_apply(
+             self._get_target_single, flatten_cls_preds.detach(),
+             flatten_centerness.detach(),
+             flatten_priors.unsqueeze(0).repeat(num_imgs, 1, 1),
+             flatten_bboxes.detach(), gt_bboxes, gt_labels)
 
+        # The experimental results show that ‘reduce_mean’ can improve
+        # performance on the COCO dataset.
+        num_pos = torch.tensor(
+            sum(num_fg_imgs),
+            dtype=torch.float,
+            device=flatten_cls_preds.device)
+        num_total_samples = max(reduce_mean(num_pos), 1.0)
 
-    def _get_target_single(self,
-                           flat_priors,
-                           cls_preds,
-                           decoded_bboxes,
-                           lqe_preds,
-                           gt_bboxes,
-                           gt_labels):
-        num_priors = flat_priors.shape[0]
-        num_gts = gt_labels.shape[0]
+        pos_masks = torch.cat(pos_masks, 0)
+        cls_targets = torch.cat(cls_targets, 0)
+        obj_targets = torch.cat(obj_targets, 0)
+        bbox_targets = torch.cat(bbox_targets, 0)
+        if self.use_l1:
+            l1_targets = torch.cat(l1_targets, 0)
+
+        loss_bbox = self.loss_bbox(
+            flatten_bboxes.view(-1, 4)[pos_masks],
+            bbox_targets) / num_total_samples
+        loss_obj = self.loss_obj(flatten_objectness.view(-1, 1),
+                                 obj_targets) / num_total_samples
+        loss_cls = self.loss_cls(
+            flatten_cls_preds.view(-1, self.num_classes)[pos_masks],
+            cls_targets) / num_total_samples
+
+        loss_dict = dict(
+            loss_cls=loss_cls, loss_bbox=loss_bbox, loss_obj=loss_obj)
+
+        if self.use_l1:
+            loss_l1 = self.loss_l1(
+                flatten_bbox_preds.view(-1, 4)[pos_masks],
+                l1_targets) / num_total_samples
+            loss_dict.update(loss_l1=loss_l1)
+
+        return loss_dict
+
+    @torch.no_grad()
+    def _get_target_single(self, cls_preds, objectness, priors, decoded_bboxes,
+                           gt_bboxes, gt_labels):
+        """Compute classification, regression, and objectness targets for
+        priors in a single image.
+        Args:
+            cls_preds (Tensor): Classification predictions of one image,
+                a 2D-Tensor with shape [num_priors, num_classes]
+            objectness (Tensor): Objectness predictions of one image,
+                a 1D-Tensor with shape [num_priors]
+            priors (Tensor): All priors of one image, a 2D-Tensor with shape
+                [num_priors, 4] in [cx, xy, stride_w, stride_y] format.
+            decoded_bboxes (Tensor): Decoded bboxes predictions of one image,
+                a 2D-Tensor with shape [num_priors, 4] in [tl_x, tl_y,
+                br_x, br_y] format.
+            gt_bboxes (Tensor): Ground truth bboxes of one image, a 2D-Tensor
+                with shape [num_gts, 4] in [tl_x, tl_y, br_x, br_y] format.
+            gt_labels (Tensor): Ground truth labels of one image, a Tensor
+                with shape [num_gts].
+        """
+
+        num_priors = priors.size(0)
+        num_gts = gt_labels.size(0)
         gt_bboxes = gt_bboxes.to(decoded_bboxes.dtype)
-
         # No target
         if num_gts == 0:
             cls_target = cls_preds.new_zeros((0, self.num_classes))
@@ -144,8 +160,28 @@ class AlignHead_v1(ATSSHead):
         # YOLOX uses center priors with 0.5 offset to assign targets,
         # but use center priors without offset to regress bboxes.
         offset_priors = torch.cat(
-            [flat_priors[:, :2] + flat_priors[:, 2:] * 0.5, flat_priors[:, 2:]], dim=-1)
+            [priors[:, :2] + priors[:, 2:] * 0.5, priors[:, 2:]], dim=-1)
 
         assign_result = self.assigner.assign(
-            cls_preds.sigmoid() * lqe_preds.unsqueeze(1).sigmoid(),
+            cls_preds.sigmoid() * objectness.unsqueeze(1).sigmoid(),
             offset_priors, decoded_bboxes, gt_bboxes, gt_labels)
+
+        sampling_result = self.sampler.sample(assign_result, priors, gt_bboxes)
+        pos_inds = sampling_result.pos_inds
+        num_pos_per_img = pos_inds.size(0)
+
+        pos_ious = assign_result.max_overlaps[pos_inds]
+        # IOU aware classification score
+        cls_target = F.one_hot(sampling_result.pos_gt_labels,
+                               self.num_classes) * pos_ious.unsqueeze(-1)
+        obj_target = torch.zeros_like(objectness).unsqueeze(-1)
+        obj_target[pos_inds] = 1
+        bbox_target = sampling_result.pos_gt_bboxes
+        l1_target = cls_preds.new_zeros((num_pos_per_img, 4))
+        if self.use_l1:
+            l1_target = self._get_l1_target(l1_target, bbox_target,
+                                            priors[pos_inds])
+        foreground_mask = torch.zeros_like(objectness).to(torch.bool)
+        foreground_mask[pos_inds] = 1
+        return (foreground_mask, cls_target, obj_target, bbox_target,
+                l1_target, num_pos_per_img)
