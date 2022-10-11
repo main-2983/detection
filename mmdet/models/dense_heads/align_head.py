@@ -29,7 +29,7 @@ class AlignHead_v1(ATSSHead):
         self.anchor_type = anchor_type
         self.assigner = build_assigner(self.train_cfg.assigner)
 
-    def anchor_center(self, anchors):
+    def anchor_center(self, anchors, with_stride=None):
         """Get anchor centers from anchors.
 
         Args:
@@ -40,7 +40,18 @@ class AlignHead_v1(ATSSHead):
         """
         anchors_cx = (anchors[..., 2] + anchors[..., 0]) / 2
         anchors_cy = (anchors[..., 3] + anchors[..., 1]) / 2
-        return torch.stack([anchors_cx, anchors_cy], dim=-1)
+        if with_stride is None:
+            return torch.stack([anchors_cx, anchors_cy], dim=-1)
+        else:
+            stride_w, stride_h = with_stride[0], with_stride[1]
+            stride_w = anchors_cx.new_full((anchors_cx.shape[0],),
+                                           stride_w)
+            stride_h = anchors_cy.new_full((anchors_cy.shape[0],),
+                                           stride_h)
+            priors = torch.stack([anchors_cx, anchors_cy, stride_w, stride_h],
+                                 dim=-1)
+            return priors
+
 
     def forward(self, feats):
         return multi_apply(self.forward_single(feats,
@@ -81,28 +92,6 @@ class AlignHead_v1(ATSSHead):
         centerness = self.atss_centerness(reg_feat)
         return cls_score, bbox_pred, centerness
 
-    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'centernesses'))
-    def loss(self,
-             cls_scores,
-             bbox_preds,
-             centernesses,
-             gt_bboxes,
-             gt_labels,
-             img_metas,
-             gt_bboxes_ignore=None):
-        featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
-        assert len(featmap_sizes) == self.prior_generator.num_levels
-
-        device = cls_scores[0].device
-        anchor_list, valid_flag_list = self.get_anchors(
-            featmap_sizes, img_metas, device=device)
-        label_channels = self.cls_out_channels if self.use_sigmoid_cls else 1
-        for idx in range(len(anchor_list)):
-            mlvl_anchor_per_image = anchor_list[idx]
-            for i in range(len(mlvl_anchor_per_image)):
-                one_scale_anchor_per_image = mlvl_anchor_per_image[i]
-
-
 
     def get_targets(self,
                     anchor_list,
@@ -113,3 +102,50 @@ class AlignHead_v1(ATSSHead):
                     gt_labels_list=None,
                     label_channels=1,
                     unmap_outputs=True):
+        num_imgs = len(img_metas)
+        assert len(anchor_list) == len(valid_flag_list) == num_imgs
+
+        # concat all level anchors and flags to a single tensor
+        for i in range(num_imgs):
+            assert len(anchor_list[i]) == len(valid_flag_list[i])
+            anchor_list[i] = torch.cat(anchor_list[i])
+
+        # convert anchor to point with stride
+        for scale, (single_level_anchor, stride) in enumerate(
+            anchor_list, self.prior_generator.strides
+        ):
+            single_level_prior = self.anchor_center(single_level_anchor,
+                                                    stride)
+            anchor_list[scale] = single_level_prior
+
+
+
+    def _get_target_single(self,
+                           flat_priors,
+                           cls_preds,
+                           decoded_bboxes,
+                           lqe_preds,
+                           gt_bboxes,
+                           gt_labels):
+        num_priors = flat_priors.shape[0]
+        num_gts = gt_labels.shape[0]
+        gt_bboxes = gt_bboxes.to(decoded_bboxes.dtype)
+
+        # No target
+        if num_gts == 0:
+            cls_target = cls_preds.new_zeros((0, self.num_classes))
+            bbox_target = cls_preds.new_zeros((0, 4))
+            l1_target = cls_preds.new_zeros((0, 4))
+            obj_target = cls_preds.new_zeros((num_priors, 1))
+            foreground_mask = cls_preds.new_zeros(num_priors).bool()
+            return (foreground_mask, cls_target, obj_target, bbox_target,
+                    l1_target, 0)
+
+        # YOLOX uses center priors with 0.5 offset to assign targets,
+        # but use center priors without offset to regress bboxes.
+        offset_priors = torch.cat(
+            [flat_priors[:, :2] + flat_priors[:, 2:] * 0.5, flat_priors[:, 2:]], dim=-1)
+
+        assign_result = self.assigner.assign(
+            cls_preds.sigmoid() * lqe_preds.unsqueeze(1).sigmoid(),
+            offset_priors, decoded_bboxes, gt_bboxes, gt_labels)
