@@ -1,5 +1,7 @@
 from typing import Optional
 
+import torch
+
 from mmcv.runner.hooks import HOOKS, Hook
 import warnings
 
@@ -40,10 +42,12 @@ class BaseLabelAssignmentVisHook(Hook):
             self.sampled = True
 
     def after_train_epoch(self, runner):
-        assign_matrices, strides, priors_per_level = self._get_assign_results(runner)
+        assign_matrices, strides, priors_per_level, featmap_sizes =\
+            self._get_assign_results(runner)
         self._plot_results(assign_matrices,
                            strides,
-                           priors_per_level)
+                           priors_per_level,
+                           featmap_sizes)
 
     def _get_assign_results(self, runner):
         """ This will execute label assignment from the start for only the images
@@ -62,12 +66,38 @@ class BaseLabelAssignmentVisHook(Hook):
     def _plot_results(self,
                       assign_matrices,
                       strides,
-                      multi_priors_per_level):
-        for (image, gt_bboxes, assign_matrix, stride, priors_per_level) in zip(
+                      multi_priors_per_level,
+                      multi_featmap_sizes):
+        for (image, gt_bboxes, assign_matrix, stride, priors_per_level, featmap_sizes) in zip(
                 self.image_list,
                 self.gt_bboxes_list,
                 assign_matrices,
                 strides,
-                multi_priors_per_level
+                multi_priors_per_level,
+                multi_featmap_sizes
         ):
-            pass
+            assert len(stride) == len(priors_per_level), "Number of level must equal to number of strides"
+            results = []
+            # loop through each scale level to reshape 1D assign matrix
+            # to 2D assign matrix of each scale
+            for i in range(len(priors_per_level)):
+                stride_level_i = stride[i]
+                featmap_size_level_i = featmap_sizes[i]
+                num_priors_level_i = priors_per_level[i]
+                if i == 0:
+                    matrix_level_i = assign_matrix[:num_priors_level_i]
+                else:
+                    matrix_level_i = \
+                        assign_matrix[priors_per_level[i-1]:num_priors_level_i]
+                matrix_level_i = matrix_level_i.view((featmap_size_level_i[0],
+                                                      featmap_size_level_i[1]))
+                # this will return a list of 2D position of where the label is non-zero on the matrix
+                pos_location_level_i = torch.nonzero(matrix_level_i)
+                if pos_location_level_i.numel() > 0:
+                    for location in pos_location_level_i:
+                        category_id = matrix_level_i[location[0], location[1]]
+                        location = (location + 0.5) * stride_level_i
+                        results.append(
+                            torch.cat([location, category_id.int(), stride_level_i.int()])
+                        )
+

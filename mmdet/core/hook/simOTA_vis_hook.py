@@ -20,6 +20,7 @@ class SimOTAVisualizeHook(BaseLabelAssignmentVisHook):
         all_images_assign_matrices = []
         all_images_strides = []
         all_images_num_priors_per_level = []
+        all_images_featmap_sizes = []
 
         with torch.no_grad():
             for (image, gt_bboxes, gt_labels, img_metas) in zip(
@@ -48,6 +49,7 @@ class SimOTAVisualizeHook(BaseLabelAssignmentVisHook):
                 strides = bbox_head.prior_generator.strides
                 all_images_num_priors_per_level.append(num_priors_per_level)
                 all_images_strides.append(strides)
+                all_images_featmap_sizes.append(featmap_sizes)
 
                 flatten_cls_preds = [
                     cls_pred.permute(0, 2, 3, 1).reshape(num_imgs, -1,
@@ -111,4 +113,5 @@ class SimOTAVisualizeHook(BaseLabelAssignmentVisHook):
                 assign_matrix[pos_inds] = pos_labels
                 all_images_assign_matrices.append(assign_matrix)
 
-        return all_images_assign_matrices, all_images_strides, all_images_num_priors_per_level
+        return all_images_assign_matrices, all_images_strides,\
+               all_images_num_priors_per_level, all_images_featmap_sizes
