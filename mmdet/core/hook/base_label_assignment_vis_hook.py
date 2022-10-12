@@ -40,10 +40,34 @@ class BaseLabelAssignmentVisHook(Hook):
             self.sampled = True
 
     def after_train_epoch(self, runner):
+        assign_matrices, strides, priors_per_level = self._get_assign_results(runner)
+        self._plot_results(assign_matrices,
+                           strides,
+                           priors_per_level)
+
+    def _get_assign_results(self, runner):
         """ This will execute label assignment from the start for only the images
         in self.image_list. Since every model has its own implementation of label assignment,
         every specific label assignment strat will inherit from this Base and execute its own
-        label assignment """
+        label assignment
+        This function must execute these things in order:
+        1. Grab model from runner
+        2. Put model in eval mode (avoid model updating gradients)
+        3. Perform forward pass, get outputs of bbox_head
+        4. Perform label assignment to get `assign_result` and `sampling_result`
+        5. Return `assign_matrices`, `strides` and `multi_priors_per_level`
+        """
         pass
 
-
+    def _plot_results(self,
+                      assign_matrices,
+                      strides,
+                      multi_priors_per_level):
+        for (image, gt_bboxes, assign_matrix, stride, priors_per_level) in zip(
+                self.image_list,
+                self.gt_bboxes_list,
+                assign_matrices,
+                strides,
+                multi_priors_per_level
+        ):
+            pass
