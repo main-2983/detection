@@ -79,3 +79,39 @@ class LayerAttnS(nn.Module):
         _x = _x.view(b, c, h, w)
 
         return _x
+
+
+class LayerAttnM(nn.Module):
+    def __init__(self,
+                 channels,
+                 groups):
+        super(LayerAttnM, self).__init__()
+        self.channels = channels
+        self.groups = groups
+        self.squeeze = nn.ModuleList([
+            nn.AdaptiveAvgPool2d(1),
+            nn.AdaptiveMaxPool2d(1)
+        ])
+        self.layer_attn = nn.Conv2d(channels, channels, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        b, c, h, w = x.shape
+
+        avg_feat = self.squeeze[0](x)
+        max_feat = self.squeeze[1](x)
+
+        avg_weight = self.layer_attn(avg_feat)
+        max_weight = self.layer_attn(max_feat)
+        weight = self.sigmoid(avg_weight + max_weight)
+
+        x = x.view(b, self.groups, c // self.groups, h, w)
+        weight = weight.view(b, self.groups, 1, 1, 1)
+        _x = x.clone()
+
+        for group in range(self.groups):
+            _x[:, group] = x[:, group] * weight[:, group]
+
+        _x = _x.view(b, c, h, w)
+
+        return _x
