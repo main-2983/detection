@@ -1,9 +1,6 @@
 import torch
-import torch.nn.functional as F
 from mmcv.runner import HOOKS
 from .base_label_assignment_vis_hook import BaseLabelAssignmentVisHook
-
-from mmdet.core.utils.misc import multi_apply
 
 
 @HOOKS.register_module()

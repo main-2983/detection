@@ -1,9 +1,31 @@
 from typing import Optional
+import cv2
 
 import torch
 
 from mmcv.runner.hooks import HOOKS, Hook
 import warnings
+
+
+class Colors:
+    # Ultralytics color palette https://ultralytics.com/
+    def __init__(self):
+        # hex = matplotlib.colors.TABLEAU_COLORS.values()
+        hex = ('FF3838', 'FF9D97', 'FF701F', 'FFB21D', 'CFD231', '48F90A', '92CC17', '3DDB86', '1A9334', '00D4BB',
+               '2C99A8', '00C2FF', '344593', '6473FF', '0018EC', '8438FF', '520085', 'CB38FF', 'FF95C8', 'FF37C7')
+        self.palette = [self.hex2rgb('#' + c) for c in hex]
+        self.n = len(self.palette)
+
+    def __call__(self, i, bgr=False):
+        c = self.palette[int(i) % self.n]
+        return (c[2], c[1], c[0]) if bgr else c
+
+    @staticmethod
+    def hex2rgb(h):  # rgb order (PIL)
+        return tuple(int(h[1 + i:1 + i + 2], 16) for i in (0, 2, 4))
+
+colors = Colors()
+
 
 @HOOKS.register_module()
 class BaseLabelAssignmentVisHook(Hook):
@@ -68,14 +90,16 @@ class BaseLabelAssignmentVisHook(Hook):
                       strides,
                       multi_priors_per_level,
                       multi_featmap_sizes):
-        for (image, gt_bboxes, assign_matrix, stride, priors_per_level, featmap_sizes) in zip(
-                self.image_list,
-                self.gt_bboxes_list,
-                assign_matrices,
-                strides,
-                multi_priors_per_level,
-                multi_featmap_sizes
-        ):
+        for (image, image_metas, gt_bboxes, gt_label, assign_matrix, stride, priors_per_level, featmap_sizes) in \
+                zip(
+                    self.image_list,
+                    self.img_metas_list,
+                    self.gt_bboxes_list,
+                    self.gt_label_list,
+                    assign_matrices,
+                    strides,
+                    multi_priors_per_level,
+                    multi_featmap_sizes):
             assert len(stride) == len(priors_per_level), "Number of level must equal to number of strides"
             results = []
             # loop through each scale level to reshape 1D assign matrix
@@ -98,6 +122,24 @@ class BaseLabelAssignmentVisHook(Hook):
                         category_id = matrix_level_i[location[0], location[1]]
                         location = (location + 0.5) * stride_level_i
                         results.append(
-                            torch.cat([location, category_id.int(), stride_level_i.int()])
+                            torch.cat([location.int(), category_id.int(), stride_level_i.int()])
                         )
 
+            np_image = image.clone()[0].cpu().numpy().transpose(1, 2, 0)
+            # draw positive anchors as circles
+            for result in results:
+                coord = result[:2]
+                category_id = result[2]
+                scale = result[3]
+                np_image = cv2.circle(np_image.copy(),
+                                      coord[::-1],
+                                      int(scale / 2),
+                                      colors(category_id),
+                                      thickness=-1)
+            # draw gt bbox
+            for gt_bbox in gt_bboxes:
+                np_image = cv2.rectangle(np_image.copy(),
+                                         gt_bbox[:2],
+                                         gt_bbox[2:],
+                                         colors(gt_label.int()))
+            cv2.imwrite()

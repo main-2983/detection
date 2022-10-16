@@ -177,10 +177,6 @@ class AlignHead_v1(FCOSHead):
         obj_target = torch.zeros_like(objectness).unsqueeze(-1)
         obj_target[pos_inds] = 1
         bbox_target = sampling_result.pos_gt_bboxes
-        l1_target = cls_preds.new_zeros((num_pos_per_img, 4))
-        if self.use_l1:
-            l1_target = self._get_l1_target(l1_target, bbox_target,
-                                            priors[pos_inds])
         foreground_mask = torch.zeros_like(objectness).to(torch.bool)
         foreground_mask[pos_inds] = 1
         return (foreground_mask, cls_target, obj_target, bbox_target,
