@@ -1167,10 +1167,10 @@ class DecoupledRevFCOSHead_v5(FCOSHead):
 
 
 @HEADS.register_module()
-class RevFCOSHead_v6(FCOSHead):
+class DecoupledRevFCOSHead_v6(FCOSHead):
     def __init__(self,
                  **kwargs):
-        super(RevFCOSHead_v6, self).__init__(**kwargs)
+        super(DecoupledRevFCOSHead_v6, self).__init__(**kwargs)
         self.bbox_coder = RevDistancePointBBoxCoder()
 
     def _init_predictor(self):
