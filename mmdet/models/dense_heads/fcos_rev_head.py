@@ -1188,6 +1188,52 @@ class DecoupledRevFCOSHead_v6(FCOSHead):
             ),
         ])
 
+    def forward_single(self, x, scale, stride):
+        """Forward features of a single scale level.
+
+        Args:
+            x (Tensor): FPN feature maps of the specified stride.
+            scale (:obj: `mmcv.cnn.Scale`): Learnable scale module to resize
+                the bbox prediction.
+            stride (int): The corresponding stride for feature maps, only
+                used to normalize the bbox prediction when self.norm_on_bbox
+                is True.
+
+        Returns:
+            tuple: scores for each class, bbox predictions and centerness \
+                predictions of input feature maps.
+        """
+        cls_feat = x
+        reg_feat = x
+
+        for cls_layer in self.cls_convs:
+            cls_feat = cls_layer(cls_feat)
+        cls_score = self.conv_cls(cls_feat)
+
+        for reg_layer in self.reg_convs:
+            reg_feat = reg_layer(reg_feat)
+
+        # scale the bbox_pred of different level
+        # float to avoid overflow when enabling FP16
+        lr_pred = scale[0](self.conv_reg[0](reg_feat)).float()
+        tb_pred = scale[1](self.conv_reg[1](reg_feat)).float()
+        bbox_pred = torch.cat([lr_pred, tb_pred],
+                              dim=1)
+        if self.centerness_on_reg:
+            centerness = self.conv_centerness(reg_feat)
+        else:
+            centerness = self.conv_centerness(cls_feat)
+        if self.norm_on_bbox:
+            # bbox_pred needed for gradient computation has been modified
+            # by F.relu(bbox_pred) when run with PyTorch 1.10. So replace
+            # F.relu(bbox_pred) with bbox_pred.clamp(min=0)
+            bbox_pred = bbox_pred.clamp(min=0)
+            if not self.training:
+                bbox_pred *= stride
+        else:
+            bbox_pred = bbox_pred.exp()
+        return cls_score, bbox_pred, centerness
+
     def _get_target_single(self, gt_bboxes, gt_labels, points, regress_ranges,
                            num_points_per_lvl):
         """Compute regression and classification targets for a single image."""
