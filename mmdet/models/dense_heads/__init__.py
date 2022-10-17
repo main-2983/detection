@@ -48,7 +48,7 @@ from .decoupled_head import DecoupledHead, DecoupledHead_v2, DecoupledHead_v3, \
 from .free_dec_head import AFDecoupled_Head, AFDecoupled_Head_v2
 from .fcos_rev_head import RevFCOSHead, DecoupledRevFCOSHead, RevFCOSHead_v2, RevFCOSHead_v3,\
     DecoupledRevFCOSHead_v2, DecoupledRevFCOSHead_v3, DecoupledRevFCOSHead_v4, \
-    DecoupledRevFCOSHead_v5
+    DecoupledRevFCOSHead_v5, DecoupledRevFCOSHead_v6
 
 __all__ = [
     'AnchorFreeHead', 'AnchorHead', 'GuidedAnchorHead', 'FeatureAdaption',
@@ -70,5 +70,5 @@ __all__ = [
     'DecoupledRevFCOSHead', 'DecoupledHead_v11', 'DecoupledHead_v12',
     'RevFCOSHead_v2', 'RevFCOSHead_v3', 'DecoupledRevFCOSHead_v2',
     'DecoupledRevFCOSHead_v3', 'DecoupledRevFCOSHead_v4',
-    'DecoupledRevFCOSHead_v5'
+    'DecoupledRevFCOSHead_v5', 'DecoupledRevFCOSHead_v6'
 ]
