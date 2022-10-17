@@ -1213,16 +1213,17 @@ class DecoupledRevFCOSHead_v6(FCOSHead):
         for reg_layer in self.reg_convs:
             reg_feat = reg_layer(reg_feat)
 
-        # scale the bbox_pred of different level
-        # float to avoid overflow when enabling FP16
-        lr_pred = scale[0](self.conv_reg[0](reg_feat)).float()
-        tb_pred = scale[1](self.conv_reg[1](reg_feat)).float()
+        lr_pred = self.conv_reg[0](reg_feat)
+        tb_pred = self.conv_reg[1](reg_feat)
         bbox_pred = torch.cat([lr_pred, tb_pred],
                               dim=1)
         if self.centerness_on_reg:
             centerness = self.conv_centerness(reg_feat)
         else:
             centerness = self.conv_centerness(cls_feat)
+        # scale the bbox_pred of different level
+        # float to avoid overflow when enabling FP16
+        bbox_pred = scale(bbox_pred).float()
         if self.norm_on_bbox:
             # bbox_pred needed for gradient computation has been modified
             # by F.relu(bbox_pred) when run with PyTorch 1.10. So replace
