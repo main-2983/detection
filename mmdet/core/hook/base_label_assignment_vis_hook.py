@@ -2,14 +2,19 @@ from typing import Union
 import os.path as osp
 import os
 import cv2
+import warnings
 
 import torch
 
 from mmcv.fileio import FileClient
 from mmcv.runner.hooks import HOOKS, Hook
-import warnings
+from mmcv.parallel import collate, scatter
 
 from mmcv.runner import EpochBasedRunner, CheckpointHook
+from mmcv.parallel import MMDataParallel, scatter, MMDistributedDataParallel
+
+class UnNorm:
+    pass
 
 
 class Colors:
