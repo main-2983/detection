@@ -10,7 +10,7 @@ class SimOTAVisualizeHook(BaseLabelAssignmentVisHook):
         super(SimOTAVisualizeHook, self).__init__(**kwargs)
 
     def _get_assign_results(self, runner):
-        model = runner.model
+        model = runner.model.module
         model.eval()
         bbox_head = model.bbox_head
 
@@ -35,7 +35,7 @@ class SimOTAVisualizeHook(BaseLabelAssignmentVisHook):
                     mlvl_lqe_pred = None
                 else:
                     raise NotImplementedError
-                num_imgs = len(img_metas)
+                num_imgs = 1
                 featmap_sizes = [cls_score.shape[2:] for cls_score in mlvl_cls_score]
                 mlvl_priors = bbox_head.prior_generator.grid_priors(
                     featmap_sizes,
@@ -50,7 +50,7 @@ class SimOTAVisualizeHook(BaseLabelAssignmentVisHook):
 
                 flatten_cls_preds = [
                     cls_pred.permute(0, 2, 3, 1).reshape(num_imgs, -1,
-                                                         self.cls_out_channels)
+                                                         bbox_head.cls_out_channels)
                     for cls_pred in mlvl_cls_score
                 ]
                 flatten_bbox_preds = [
@@ -98,15 +98,15 @@ class SimOTAVisualizeHook(BaseLabelAssignmentVisHook):
                 if mlvl_lqe_pred is not None:
                     cls_score = cls_score * flatten_lqe_pred.unsqueeze(1).sigmoid()
 
-                assign_result = self.assigner.assign(
+                assign_result = bbox_head.assigner.assign(
                     cls_score, offset_priors, flatten_bboxes,
                     gt_bboxes, gt_labels)
 
-                sampling_result = self.sampler.sample(assign_result, flatten_priors, gt_bboxes)
+                sampling_result = bbox_head.sampler.sample(assign_result, flatten_priors, gt_bboxes)
                 pos_inds = sampling_result.pos_inds
                 pos_labels = sampling_result.pos_gt_labels
 
-                assign_matrix = torch.zeros_like(flatten_lqe_pred)
+                assign_matrix = torch.zeros_like(flatten_lqe_pred).long()
                 assign_matrix[pos_inds] = pos_labels
                 all_images_assign_matrices.append(assign_matrix)
 

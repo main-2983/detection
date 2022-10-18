@@ -1,10 +1,15 @@
-from typing import Optional
+from typing import Union
+import os.path as osp
+import os
 import cv2
 
 import torch
 
+from mmcv.fileio import FileClient
 from mmcv.runner.hooks import HOOKS, Hook
 import warnings
+
+from mmcv.runner import EpochBasedRunner, CheckpointHook
 
 
 class Colors:
@@ -30,7 +35,7 @@ colors = Colors()
 @HOOKS.register_module()
 class BaseLabelAssignmentVisHook(Hook):
     def __init__(self,
-                 sample_idxs: Optional[int, list]=0,
+                 sample_idxs: Union[int, list]=0,
                  num_images=None):
         self.sample_idxs = [sample_idxs]
         if num_images is not None and isinstance(sample_idxs, int):
@@ -43,6 +48,15 @@ class BaseLabelAssignmentVisHook(Hook):
         # we set this explicit in before_train_epoch instead of using before_run hook because
         # before_run doesn't contain dataset or dataloader
         self.sampled = False
+
+    def before_run(self, runner):
+        self.out_dir = runner.work_dir
+        self.file_client = FileClient.infer_client(None,
+                                                   self.out_dir)
+        self.out_dir = self.file_client.join_path(self.out_dir, "LabelAssignmentVis")
+        runner.logger.info(f'Label Assignment Visualization will be saved to {self.out_dir} by '
+                           f'{self.file_client.name}.')
+        os.makedirs(self.out_dir, exist_ok=True)
 
     def before_train_epoch(self, runner):
         if self.sampled is False:
@@ -64,6 +78,7 @@ class BaseLabelAssignmentVisHook(Hook):
             self.sampled = True
 
     def after_train_epoch(self, runner):
+        runner.logger.info("Performing Label Assignment Visualization...")
         assign_matrices, strides, priors_per_level, featmap_sizes =\
             self._get_assign_results(runner)
         self._plot_results(assign_matrices,
@@ -102,6 +117,7 @@ class BaseLabelAssignmentVisHook(Hook):
                     multi_featmap_sizes):
             assert len(stride) == len(priors_per_level), "Number of level must equal to number of strides"
             results = []
+            image_name = image_metas['ori_filename']
             # loop through each scale level to reshape 1D assign matrix
             # to 2D assign matrix of each scale
             for i in range(len(priors_per_level)):
@@ -112,7 +128,7 @@ class BaseLabelAssignmentVisHook(Hook):
                     matrix_level_i = assign_matrix[:num_priors_level_i]
                 else:
                     matrix_level_i = \
-                        assign_matrix[priors_per_level[i-1]:num_priors_level_i]
+                        assign_matrix[priors_per_level[i-1]:(priors_per_level[i-1] + num_priors_level_i)]
                 matrix_level_i = matrix_level_i.view((featmap_size_level_i[0],
                                                       featmap_size_level_i[1]))
                 # this will return a list of 2D position of where the label is non-zero on the matrix
@@ -137,9 +153,9 @@ class BaseLabelAssignmentVisHook(Hook):
                                       colors(category_id),
                                       thickness=-1)
             # draw gt bbox
-            for gt_bbox in gt_bboxes:
+            for i, gt_bbox in enumerate(gt_bboxes):
                 np_image = cv2.rectangle(np_image.copy(),
                                          gt_bbox[:2],
                                          gt_bbox[2:],
-                                         colors(gt_label.int()))
-            cv2.imwrite()
+                                         colors(gt_label[i].int()))
+            cv2.imwrite(osp.join(self.out_dir, image_name), np_image)
