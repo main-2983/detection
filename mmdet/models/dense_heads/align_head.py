@@ -18,18 +18,68 @@ class AlignHead_v1(FCOSHead):
     def __init__(self,
                  num_classes,
                  in_channels,
+                 loss_lqe=dict(
+                     type='CrossEntropyLoss',
+                     use_sigmoid=True,
+                     loss_weight=1.0
+                 ),
                  **kwargs):
         super(AlignHead_v1, self).__init__(
             num_classes,
             in_channels,
             **kwargs
         )
+        self.loss_lqe = build_loss(loss_lqe)
+        assigner_cfg = dict(type='SimOTAAssigner',
+                            center_radius=2.5,
+                            candidate_topk=10)
+        self.assigner = build_assigner(assigner_cfg)
+        sampler_cfg = dict(type='PseudoSampler')
+        self.sampler = build_sampler(sampler_cfg, context=self)
+
+
+    def _bbox_decode(self, priors, bbox_preds):
+        """ Convert [l, t, r, b] bbox format to [x1, y1, x2, y2] bbox format """
+        x1 = priors[..., 0] - bbox_preds[..., 0]
+        y1 = priors[..., 1] - bbox_preds[..., 1]
+        x2 = priors[..., 0] + bbox_preds[..., 2]
+        y2 = priors[..., 1] + bbox_preds[..., 3]
+        return torch.stack([x1, y1, x2, y2], dim=-1)
+
+    def _bbox_encode(self, priors, bbox_targets):
+        """ Convert [x1, y1, x2, y2] bbox format to [l, t, r, b] bbox format """
+        left = priors[..., 0] - bbox_targets[..., 0]
+        top = priors[..., 1] - bbox_targets[..., 1]
+        right = bbox_targets[..., 2] - priors[..., 0]
+        bottom = bbox_targets[..., 3] - priors[..., 1]
+        return torch.stack([left, top, right, bottom], dim=-1)
+
+    def centerness_target(self, pos_bbox_targets):
+        """Compute centerness targets.
+
+        Args:
+            pos_bbox_targets (Tensor): BBox targets of positive bboxes in shape
+                (num_pos, 4)
+
+        Returns:
+            Tensor: Centerness target.
+        """
+        # only calculate pos centerness targets, otherwise there may be nan
+        left_right = pos_bbox_targets[:, [0, 2]]
+        top_bottom = pos_bbox_targets[:, [1, 3]]
+        if len(left_right) == 0:
+            centerness_targets = left_right[..., 0]
+        else:
+            centerness_targets = (
+                left_right.min(dim=-1)[0] / left_right.max(dim=-1)[0]) * (
+                    top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
+        return torch.sqrt(centerness_targets)
 
     @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'objectnesses'))
     def loss(self,
              cls_scores,
              bbox_preds,
-             centernesses,
+             lqe_preds,
              gt_bboxes,
              gt_labels,
              img_metas,
@@ -70,22 +120,24 @@ class AlignHead_v1(FCOSHead):
             bbox_pred.permute(0, 2, 3, 1).reshape(num_imgs, -1, 4)
             for bbox_pred in bbox_preds
         ]
-        flatten_centerness = [
-            centerness.permute(0, 2, 3, 1).reshape(-1)
-            for centerness in centernesses
+        flatten_lqe_preds = [
+            lqe_pred.permute(0, 2, 3, 1).reshape(num_imgs, -1)
+            for lqe_pred in lqe_preds
         ]
 
         flatten_cls_preds = torch.cat(flatten_cls_preds, dim=1)
         flatten_bbox_preds = torch.cat(flatten_bbox_preds, dim=1)
-        flatten_centerness = torch.cat(flatten_centerness)
+        flatten_lqe_preds = torch.cat(flatten_lqe_preds, dim=1)
+        #flatten_priors =
         flatten_priors = torch.cat(mlvl_priors)
-        flatten_bboxes = self.bbox_coder.decode(flatten_priors, flatten_bbox_preds)
+        flatten_priors = flatten_priors.unsqueeze(0).repeat(num_imgs, 1, 1)
+        flatten_bboxes = self._bbox_decode(flatten_priors, flatten_bbox_preds)
 
-        (pos_masks, cls_targets, centerness_targets, bbox_targets, l1_targets,
+        (pos_masks, cls_targets, lqe_targets, bbox_targets,
          num_fg_imgs) = multi_apply(
              self._get_target_single, flatten_cls_preds.detach(),
-             flatten_centerness.detach(),
-             flatten_priors.unsqueeze(0).repeat(num_imgs, 1, 1),
+             flatten_lqe_preds.detach(),
+             flatten_priors,
              flatten_bboxes.detach(), gt_bboxes, gt_labels)
 
         # The experimental results show that ‘reduce_mean’ can improve
@@ -98,33 +150,31 @@ class AlignHead_v1(FCOSHead):
 
         pos_masks = torch.cat(pos_masks, 0)
         cls_targets = torch.cat(cls_targets, 0)
-        obj_targets = torch.cat(obj_targets, 0)
+        lqe_targets = torch.cat(lqe_targets, 0)
         bbox_targets = torch.cat(bbox_targets, 0)
-        if self.use_l1:
-            l1_targets = torch.cat(l1_targets, 0)
 
+        # centerness weighted iou loss
+        centerness_denorm = max(
+            reduce_mean(lqe_targets.sum().detach()), 1e-6)
         loss_bbox = self.loss_bbox(
             flatten_bboxes.view(-1, 4)[pos_masks],
-            bbox_targets) / num_total_samples
-        loss_obj = self.loss_obj(flatten_objectness.view(-1, 1),
-                                 obj_targets) / num_total_samples
+            bbox_targets,
+            avg_factor=centerness_denorm)
+        loss_lqe = self.loss_lqe(flatten_lqe_preds.view(-1, 1)[pos_masks],
+                                 lqe_targets.unsqueeze(-1),
+                                 avg_factor=num_total_samples)
         loss_cls = self.loss_cls(
             flatten_cls_preds.view(-1, self.num_classes)[pos_masks],
-            cls_targets) / num_total_samples
+            cls_targets,
+            avg_factor=num_total_samples)
 
         loss_dict = dict(
-            loss_cls=loss_cls, loss_bbox=loss_bbox, loss_obj=loss_obj)
-
-        if self.use_l1:
-            loss_l1 = self.loss_l1(
-                flatten_bbox_preds.view(-1, 4)[pos_masks],
-                l1_targets) / num_total_samples
-            loss_dict.update(loss_l1=loss_l1)
+            loss_cls=loss_cls, loss_bbox=loss_bbox, loss_lqe=loss_lqe)
 
         return loss_dict
 
     @torch.no_grad()
-    def _get_target_single(self, cls_preds, objectness, priors, decoded_bboxes,
+    def _get_target_single(self, cls_preds, lqe_preds, priors, decoded_bboxes,
                            gt_bboxes, gt_labels):
         """Compute classification, regression, and objectness targets for
         priors in a single image.
@@ -152,32 +202,26 @@ class AlignHead_v1(FCOSHead):
             cls_target = cls_preds.new_zeros((0, self.num_classes))
             bbox_target = cls_preds.new_zeros((0, 4))
             l1_target = cls_preds.new_zeros((0, 4))
-            obj_target = cls_preds.new_zeros((num_priors, 1))
+            lqe_target = cls_preds.new_zeros((num_priors, 1))
             foreground_mask = cls_preds.new_zeros(num_priors).bool()
-            return (foreground_mask, cls_target, obj_target, bbox_target,
+            return (foreground_mask, cls_target, lqe_target, bbox_target,
                     l1_target, 0)
 
-        # YOLOX uses center priors with 0.5 offset to assign targets,
-        # but use center priors without offset to regress bboxes.
-        offset_priors = torch.cat(
-            [priors[:, :2] + priors[:, 2:] * 0.5, priors[:, 2:]], dim=-1)
-
         assign_result = self.assigner.assign(
-            cls_preds.sigmoid() * objectness.unsqueeze(1).sigmoid(),
-            offset_priors, decoded_bboxes, gt_bboxes, gt_labels)
+            cls_preds.sigmoid() * lqe_preds.unsqueeze(1).sigmoid(),
+            priors, decoded_bboxes, gt_bboxes, gt_labels)
 
         sampling_result = self.sampler.sample(assign_result, priors, gt_bboxes)
         pos_inds = sampling_result.pos_inds
         num_pos_per_img = pos_inds.size(0)
 
-        pos_ious = assign_result.max_overlaps[pos_inds]
-        # IOU aware classification score
-        cls_target = F.one_hot(sampling_result.pos_gt_labels,
-                               self.num_classes) * pos_ious.unsqueeze(-1)
-        obj_target = torch.zeros_like(objectness).unsqueeze(-1)
-        obj_target[pos_inds] = 1
+        cls_target = sampling_result.pos_gt_labels
+        # cls_target = F.one_hot(sampling_result.pos_gt_labels,
+        #                        self.num_classes)
         bbox_target = sampling_result.pos_gt_bboxes
-        foreground_mask = torch.zeros_like(objectness).to(torch.bool)
+        pos_priors = priors[pos_inds]
+        encoded_bbox_target = self._bbox_encode(pos_priors, bbox_target)
+        lqe_target = self.centerness_target(encoded_bbox_target)
+        foreground_mask = torch.zeros_like(lqe_preds).to(torch.bool)
         foreground_mask[pos_inds] = 1
-        return (foreground_mask, cls_target, obj_target, bbox_target,
-                l1_target, num_pos_per_img)
+        return (foreground_mask, cls_target, lqe_target, bbox_target, num_pos_per_img)
