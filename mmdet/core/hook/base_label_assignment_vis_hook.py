@@ -13,9 +13,25 @@ from mmcv.parallel import collate, scatter
 from mmcv.runner import EpochBasedRunner, CheckpointHook
 from mmcv.parallel import MMDataParallel, scatter, MMDistributedDataParallel
 
-class UnNorm:
-    pass
 
+class UnNormalize:
+    def __init__(self, mean, std):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, tensor):
+        """
+        Args:
+            tensor (Tensor): Tensor image of size (C, H, W) to be normalized.
+        Returns:
+            Tensor: Normalized image.
+        """
+        for t, m, s in zip(tensor, self.mean, self.std):
+            t.mul_(s).add_(m)
+            # The normalize code -> t.sub_(m).div_(s)
+        return tensor
+
+unorm = UnNormalize(mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375])
 
 class Colors:
     # Ultralytics color palette https://ultralytics.com/
@@ -65,6 +81,8 @@ class BaseLabelAssignmentVisHook(Hook):
 
     def before_train_epoch(self, runner):
         if self.sampled is False:
+            model = runner.model.module
+            device = next(model.parameters()).device  # get model device
             dataset = runner.data_loader.dataset
             self.image_list = []
             self.gt_bboxes_list = []
@@ -72,10 +90,17 @@ class BaseLabelAssignmentVisHook(Hook):
             self.img_metas_list = []
             for i in self.sample_idxs:
                 sample_dict = dataset[i]
-                image_tensor = sample_dict['img'].data[None]
-                gt_bboxes_tensor = sample_dict['gt_bboxes'].data
-                gt_labels_tensor = sample_dict['gt_labels'].data
-                img_metas = sample_dict['img_metas'].data
+                # just get the actual data from DataContainer
+                sample_dict['img_metas'] = [sample_dict['img_metas'].data]
+                sample_dict['img']       = [sample_dict['img'].data]
+                sample_dict['gt_bboxes'] = [sample_dict['gt_bboxes'].data]
+                sample_dict['gt_labels'] = [sample_dict['gt_labels'].data]
+                # scatter sample to specific gpus
+                sample_dict = scatter(sample_dict, [device])[0]
+                image_tensor = sample_dict['img'][0][None] # expand image dim
+                gt_bboxes_tensor = sample_dict['gt_bboxes'][0]
+                gt_labels_tensor = sample_dict['gt_labels'][0]
+                img_metas = sample_dict['img_metas'][0]
                 self.image_list.append(image_tensor)
                 self.gt_bboxes_list.append(gt_bboxes_tensor)
                 self.gt_label_list.append(gt_labels_tensor)
@@ -125,15 +150,14 @@ class BaseLabelAssignmentVisHook(Hook):
             image_name = image_metas['ori_filename']
             # loop through each scale level to reshape 1D assign matrix
             # to 2D assign matrix of each scale
+            num_priors_from_prev_levels = 0
             for i in range(len(priors_per_level)):
                 stride_level_i = stride[i]
                 featmap_size_level_i = featmap_sizes[i]
                 num_priors_level_i = priors_per_level[i]
-                if i == 0:
-                    matrix_level_i = assign_matrix[:num_priors_level_i]
-                else:
-                    matrix_level_i = \
-                        assign_matrix[priors_per_level[i-1]:(priors_per_level[i-1] + num_priors_level_i)]
+                matrix_level_i = assign_matrix[num_priors_from_prev_levels:
+                                               (num_priors_from_prev_levels + num_priors_level_i)]
+                num_priors_from_prev_levels += num_priors_level_i
                 matrix_level_i = matrix_level_i.view((featmap_size_level_i[0],
                                                       featmap_size_level_i[1]))
                 # this will return a list of 2D position of where the label is non-zero on the matrix
@@ -141,26 +165,31 @@ class BaseLabelAssignmentVisHook(Hook):
                 if pos_location_level_i.numel() > 0:
                     for location in pos_location_level_i:
                         category_id = matrix_level_i[location[0], location[1]]
-                        location = (location + 0.5) * stride_level_i
+                        location = (location + 0.5) * stride_level_i[0]
                         results.append(
-                            torch.cat([location.int(), category_id.int(), stride_level_i.int()])
+                            [location.int().cpu().numpy(),
+                             category_id.int().cpu().numpy(),
+                             stride_level_i[0].numpy()]
                         )
 
-            np_image = image.clone()[0].cpu().numpy().transpose(1, 2, 0)
+            unorm_img = unorm(image[0].clone())
+            np_image = unorm_img.cpu().numpy().transpose(1, 2, 0)[:, :, ::-1]
             # draw positive anchors as circles
             for result in results:
-                coord = result[:2]
-                category_id = result[2]
-                scale = result[3]
+                coord = result[0]
+                category_id = result[1]
+                scale = result[2]
                 np_image = cv2.circle(np_image.copy(),
-                                      coord[::-1],
+                                      (coord[1], coord[0]),
                                       int(scale / 2),
                                       colors(category_id),
                                       thickness=-1)
             # draw gt bbox
             for i, gt_bbox in enumerate(gt_bboxes):
+                gt_bbox = gt_bbox.int().cpu().numpy()
+                gt_id = gt_label[i].int().cpu().numpy()
                 np_image = cv2.rectangle(np_image.copy(),
                                          gt_bbox[:2],
                                          gt_bbox[2:],
-                                         colors(gt_label[i].int()))
+                                         colors(gt_id))
             cv2.imwrite(osp.join(self.out_dir, image_name), np_image)

@@ -45,7 +45,7 @@ class SimOTAVisualizeHook(BaseLabelAssignmentVisHook):
                 num_priors_per_level = [single_level_priors.shape[0] for single_level_priors in mlvl_priors]
                 strides = bbox_head.prior_generator.strides
                 all_images_num_priors_per_level.append(num_priors_per_level)
-                all_images_strides.append(strides)
+                all_images_strides.append(torch.tensor([stride for stride in strides]))
                 all_images_featmap_sizes.append(featmap_sizes)
 
                 flatten_cls_preds = [
