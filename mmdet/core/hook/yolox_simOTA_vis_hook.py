@@ -4,10 +4,10 @@ from .base_label_assignment_vis_hook import BaseLabelAssignmentVisHook
 
 
 @HOOKS.register_module()
-class SimOTAVisualizeHook(BaseLabelAssignmentVisHook):
+class YOLOXSimOTAVisualizeHook(BaseLabelAssignmentVisHook):
     def __init__(self,
                  **kwargs):
-        super(SimOTAVisualizeHook, self).__init__(**kwargs)
+        super(YOLOXSimOTAVisualizeHook, self).__init__(**kwargs)
 
     def _get_assign_results(self, runner):
         model = runner.model.module
