@@ -58,12 +58,11 @@ class BaseLabelAssignmentVisHook(Hook):
     def __init__(self,
                  sample_idxs: Union[int, list]=0,
                  num_images=None):
-        self.sample_idxs = [sample_idxs]
+        self.sample_idxs = [sample_idxs] if isinstance(sample_idxs, int) else sample_idxs
         if num_images is not None and isinstance(sample_idxs, int):
             self.sample_idxs = [_ for _ in range(num_images)]
             warnings.warn(f"parameter 'sample_idxs' must be a list when 'num_images' is not None, "
                           f"setting 'sample_idxs' to {self.sample_idxs}")
-        self.num_images = num_images
         # parameter to check if this Hook has executed before_train_epoch
         # this will make sure before_train_epoch only executes once
         # we set this explicit in before_train_epoch instead of using before_run hook because
@@ -96,7 +95,8 @@ class BaseLabelAssignmentVisHook(Hook):
                 sample_dict['gt_bboxes'] = [sample_dict['gt_bboxes'].data]
                 sample_dict['gt_labels'] = [sample_dict['gt_labels'].data]
                 # scatter sample to specific gpus
-                sample_dict = scatter(sample_dict, [device])[0]
+                if device.type != 'cpu':
+                    sample_dict = scatter(sample_dict, [device])[0]
                 image_tensor = sample_dict['img'][0][None] # expand image dim
                 gt_bboxes_tensor = sample_dict['gt_bboxes'][0]
                 gt_labels_tensor = sample_dict['gt_labels'][0]

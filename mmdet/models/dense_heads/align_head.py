@@ -46,12 +46,17 @@ class AlignHead_v1(FCOSHead):
         y2 = priors[..., 1] + bbox_preds[..., 3]
         return torch.stack([x1, y1, x2, y2], dim=-1)
 
-    def _bbox_encode(self, priors, bbox_targets):
+    def _bbox_encode(self, priors, bbox_targets, clip=True):
         """ Convert [x1, y1, x2, y2] bbox format to [l, t, r, b] bbox format """
         left = priors[..., 0] - bbox_targets[..., 0]
         top = priors[..., 1] - bbox_targets[..., 1]
         right = bbox_targets[..., 2] - priors[..., 0]
         bottom = bbox_targets[..., 3] - priors[..., 1]
+        if clip:
+            left = left.clamp(min=0)
+            top = top.clamp(min=0)
+            right = right.clamp(min=0)
+            bottom = bottom.clamp(min=0)
         return torch.stack([left, top, right, bottom], dim=-1)
 
     def centerness_target(self, pos_bbox_targets):
@@ -92,7 +97,7 @@ class AlignHead_v1(FCOSHead):
             bbox_preds (list[Tensor]): Box energies / deltas for each scale
                 level, each is a 4D-tensor, the channel number is
                 num_priors * 4.
-            objectnesses (list[Tensor], Optional): Score factor for
+            lqe_preds (list[Tensor], Optional): Score factor for
                 all scale level, each is a 4D-tensor, has shape
                 (batch_size, 1, H, W).
             gt_bboxes (list[Tensor]): Ground truth bboxes for each image with
@@ -181,7 +186,7 @@ class AlignHead_v1(FCOSHead):
         Args:
             cls_preds (Tensor): Classification predictions of one image,
                 a 2D-Tensor with shape [num_priors, num_classes]
-            objectness (Tensor): Objectness predictions of one image,
+            lqe_preds (Tensor): Objectness predictions of one image,
                 a 1D-Tensor with shape [num_priors]
             priors (Tensor): All priors of one image, a 2D-Tensor with shape
                 [num_priors, 4] in [cx, xy, stride_w, stride_y] format.
