@@ -107,14 +107,15 @@ class BaseLabelAssignmentVisHook(Hook):
                 self.img_metas_list.append(img_metas)
             self.sampled = True
 
-    def after_train_epoch(self, runner):
+    def after_train_iter(self, runner):
         runner.logger.info("Performing Label Assignment Visualization...")
         assign_matrices, strides, priors_per_level, featmap_sizes =\
             self._get_assign_results(runner)
         self._plot_results(assign_matrices,
                            strides,
                            priors_per_level,
-                           featmap_sizes)
+                           featmap_sizes,
+                           runner)
 
     def _get_assign_results(self, runner):
         """ This will execute label assignment from the start for only the images
@@ -134,7 +135,10 @@ class BaseLabelAssignmentVisHook(Hook):
                       assign_matrices,
                       strides,
                       multi_priors_per_level,
-                      multi_featmap_sizes):
+                      multi_featmap_sizes,
+                      runner):
+        iter = runner._iter
+        epoch = runner._epoch
         for (image, image_metas, gt_bboxes, gt_label, assign_matrix, stride, priors_per_level, featmap_sizes) in \
                 zip(
                     self.image_list,
@@ -147,7 +151,7 @@ class BaseLabelAssignmentVisHook(Hook):
                     multi_featmap_sizes):
             assert len(stride) == len(priors_per_level), "Number of level must equal to number of strides"
             results = []
-            image_name = image_metas['ori_filename']
+            image_name = osp.splitext(image_metas['ori_filename'])[0]
             # loop through each scale level to reshape 1D assign matrix
             # to 2D assign matrix of each scale
             num_priors_from_prev_levels = 0
@@ -192,4 +196,4 @@ class BaseLabelAssignmentVisHook(Hook):
                                          gt_bbox[:2],
                                          gt_bbox[2:],
                                          colors(gt_id))
-            cv2.imwrite(osp.join(self.out_dir, image_name), np_image)
+            cv2.imwrite(osp.join(self.out_dir, image_name + str(iter) + ".jpg"), np_image)
