@@ -57,12 +57,16 @@ colors = Colors()
 class BaseLabelAssignmentVisHook(Hook):
     def __init__(self,
                  sample_idxs: Union[int, list]=0,
-                 num_images=None):
+                 num_images=None,
+                 rate='epoch'):
         self.sample_idxs = [sample_idxs] if isinstance(sample_idxs, int) else sample_idxs
         if num_images is not None and isinstance(sample_idxs, int):
             self.sample_idxs = [_ for _ in range(num_images)]
             warnings.warn(f"parameter 'sample_idxs' must be a list when 'num_images' is not None, "
                           f"setting 'sample_idxs' to {self.sample_idxs}")
+        assert rate in ['epoch', 'iter'], "'rate' must be 'epoch' or 'iter'"
+        self.rate = rate
+
         # parameter to check if this Hook has executed before_train_epoch
         # this will make sure before_train_epoch only executes once
         # we set this explicit in before_train_epoch instead of using before_run hook because
@@ -108,14 +112,27 @@ class BaseLabelAssignmentVisHook(Hook):
             self.sampled = True
 
     def after_train_iter(self, runner):
-        runner.logger.info("Performing Label Assignment Visualization...")
-        assign_matrices, strides, priors_per_level, featmap_sizes =\
-            self._get_assign_results(runner)
-        self._plot_results(assign_matrices,
-                           strides,
-                           priors_per_level,
-                           featmap_sizes,
-                           runner)
+        if self.rate == 'iter':
+            runner.logger.info("Performing Label Assignment Visualization...")
+            assign_matrices, strides, priors_per_level, featmap_sizes =\
+                self._get_assign_results(runner)
+            self._plot_results(assign_matrices,
+                               strides,
+                               priors_per_level,
+                               featmap_sizes,
+                               runner)
+
+    def after_train_epoch(self, runner):
+        if self.rate == 'epoch':
+            runner.logger.info("Performing Label Assignment Visualization...")
+            assign_matrices, strides, priors_per_level, featmap_sizes =\
+                self._get_assign_results(runner)
+            self._plot_results(assign_matrices,
+                               strides,
+                               priors_per_level,
+                               featmap_sizes,
+                               runner)
+
 
     def _get_assign_results(self, runner):
         """ This will execute label assignment from the start for only the images
@@ -137,8 +154,7 @@ class BaseLabelAssignmentVisHook(Hook):
                       multi_priors_per_level,
                       multi_featmap_sizes,
                       runner):
-        iter = runner._iter
-        epoch = runner._epoch
+        counter = runner._epoch if self.rate == 'epoch' else runner._iter
         for (image, image_metas, gt_bboxes, gt_label, assign_matrix, stride, priors_per_level, featmap_sizes) in \
                 zip(
                     self.image_list,
@@ -196,4 +212,4 @@ class BaseLabelAssignmentVisHook(Hook):
                                          gt_bbox[:2],
                                          gt_bbox[2:],
                                          colors(gt_id))
-            cv2.imwrite(osp.join(self.out_dir, image_name + str(iter) + ".jpg"), np_image)
+            cv2.imwrite(osp.join(self.out_dir, image_name + str(counter) + ".jpg"), np_image)
